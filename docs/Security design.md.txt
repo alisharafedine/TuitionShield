@@ -1,0 +1,221 @@
+TuitionShield AI — Technical Documentation
+5. Security Design
+Project: TuitionShield AI
+Database: Supabase PostgreSQL
+AI architecture: LLM API with controlled tool calling and demo fallback
+Payment architecture: Sandbox ledger with explicit user approval
+Status: Proposed security design — implementation and testing not yet verified.
+1. Security objectives
+TuitionShield AI processes personal financial planning information. Its security design must protect confidentiality, preserve data integrity, prevent unauthorized actions, and make important operations traceable.
+The main objectives are:
+1.	Prevent one user from accessing another user's financial records.
+2.	Prevent the LLM from bypassing application permissions.
+3.	Protect API credentials and database privileges.
+4.	Prevent unauthorized or duplicate simulated payments.
+5.	Ensure financial outputs are based on validated data and deterministic calculations.
+6.	Limit the impact of malicious documents, prompts, and invalid requests.
+7.	Record sufficient evidence to investigate failures and demonstrate safe behavior.
+2. Threat model
+Threat	Potential impact	Required mitigation
+Unauthorized data access	Exposure of student financial information	Authentication, authorization, RLS, and cross-user tests
+Exposed LLM API key	Unauthorized API usage and cost	Server-side secrets and key rotation
+Prompt injection	Attempts to bypass agent restrictions	Treat prompts and documents as untrusted; enforce server-side tool policies
+Malicious tool arguments	Invalid calculations or unauthorized operations	Strict schema validation and business-rule checks
+Fake approval request	Unauthorized simulated payment	Explicit user interaction and server-validated approval
+Duplicate payment execution	Duplicate ledger entries	Idempotency and concurrency-safe execution
+Manipulated financial data	Incorrect forecasts and recommendations	Input validation, deterministic calculations, and auditability
+Compromised dependency	Application or data exposure	Dependency review, updates, and vulnerability checks
+Sensitive logging	Unnecessary disclosure of financial data	Log minimization and secret redaction
+Service outage	Interrupted AI assistance	Graceful error handling and demo fallback
+3. Security architecture and boundaries
+Frontend boundary
+The React frontend is considered untrusted. Users can inspect and modify browser requests, JavaScript state, and visible UI controls.
+Therefore:
+•	Never rely on a hidden button or disabled UI control as the only authorization mechanism.
+•	Never embed a privileged Supabase service-role key or LLM API key in frontend code.
+•	Validate all data again on the backend.
+•	Treat all user-entered values and uploaded files as untrusted.
+Backend boundary
+The backend is the primary enforcement point for authorization and business rules.
+It must:
+•	Authenticate requests.
+•	Resolve the current user's identity from the verified session.
+•	Validate inputs and enforce tool permissions.
+•	Execute financial calculations through trusted application code.
+•	Control payment proposal, approval, and execution state transitions.
+•	Sanitize errors and create appropriate audit events.
+LLM boundary
+The LLM is an external service and must not be treated as trusted application code.
+Controls include:
+•	Send only the information needed for the current task.
+•	Avoid including unnecessary personal or identifying details in prompts.
+•	Use structured tool schemas and an allowlist.
+•	Validate every proposed tool call on the backend.
+•	Never let the model issue arbitrary SQL, execute shell commands, or access arbitrary network destinations.
+•	Never accept model-generated text as proof of user consent.
+•	Treat returned model content as untrusted before rendering it in the interface.
+The team must review the chosen provider's data-handling, retention, and processing terms before sending sensitive information to it.
+Database boundary
+Supabase PostgreSQL stores the application's financial records. Database security must remain effective even if a frontend request is modified.
+Controls include:
+•	RLS for user-owned records.
+•	Minimal privileges for database roles.
+•	Secure server-side handling of privileged credentials.
+•	Referential integrity and database constraints.
+•	Separate authorization rules for sensitive state changes.
+•	Regular testing of access policies.
+Sandbox payment boundary
+The payment system is a simulation only.
+•	No real bank connection or payment rail is required for the MVP.
+•	A payment proposal does not imply that a payment has occurred.
+•	Only a valid, explicit user approval can authorize the relevant simulated operation.
+•	The backend revalidates the exact proposal before execution.
+•	A successful ledger update must be recorded and verifiable.
+•	Failures must not be presented as successful payments.
+4. Authentication and authorization
+Supabase Auth should manage user identity and sessions.
+The backend must verify the user's authenticated session for protected operations. A user ID in a request body, prompt, or tool argument must never be sufficient to establish identity.
+Authorization must be checked on every resource access, including:
+•	Financial accounts.
+•	Funding sources.
+•	Expenses and obligations.
+•	Transactions.
+•	Scenario results.
+•	Payment proposals.
+•	Documents, if document storage is implemented.
+For payment operations, ownership alone is insufficient. The backend must also verify the proposal state, approval reference, applicable limits, and execution eligibility.
+5. Row Level Security
+Enable RLS for every user-owned table exposed through Supabase APIs.
+For standard user-facing operations, the intended rule is that the authenticated user can access only records whose user_id matches their authenticated identity.
+Profiles require an equivalent rule using their primary key and the authenticated user ID.
+However, a basic ownership policy is not sufficient for all tables. In particular:
+•	Users must not directly mark a proposal approved or executed.
+•	Users must not fabricate authoritative audit events.
+•	Users must not alter ledger records to manufacture payment success.
+•	Sensitive operations must use a narrowly scoped trusted server-side function or service.
+Any privileged server-side operation must independently validate the authenticated user, requested resource, and business rules. If a privileged Supabase key bypasses RLS, the backend must not assume that RLS will protect that operation.
+6. API key and secret management
+The LLM API key and any privileged Supabase key must be stored in server-side environment secrets.
+Required practices:
+•	Provide a .env.example file containing variable names and placeholders only.
+•	Keep real .env files out of version control.
+•	Never place secrets in frontend-prefixed environment variables or client bundles.
+•	Never print secrets in logs, errors, screenshots, or documentation.
+•	Restrict access to production secrets.
+•	Rotate any key suspected of exposure.
+•	Use a separate test configuration where practical.
+If Supabase Edge Functions are used, configure their secrets through the supported secret-management mechanism rather than committing credentials to the repository.
+7. AI tool security
+The tool registry must enforce a strict separation between read-only operations and sensitive actions.
+Read-only tools
+Examples include financial summaries, funding-gap calculations, forecasts, and scenario comparisons.
+They still require:
+•	Authentication and authorization.
+•	Validated arguments.
+•	Bounded date ranges and request sizes.
+•	Appropriate rate limits.
+•	Structured error handling.
+Sensitive tools
+Examples include payment proposal creation, approval handling, and sandbox execution.
+They require additional controls:
+•	A defined state machine.
+•	Explicit user interaction for approval.
+•	Server-side verification of approval.
+•	Revalidation of material payment details.
+•	An idempotency key or equivalent duplicate-prevention control.
+•	A concurrency-safe ledger update.
+•	An audit event recording the outcome.
+The LLM must not be able to approve a payment merely by generating a sentence that claims the user has consented.
+8. Payment integrity
+Before simulated execution, the backend must verify:
+1.	The proposal exists and belongs to the authenticated user.
+2.	The proposal is in a valid executable state.
+3.	Approval is present, valid, and bound to the exact proposal.
+4.	The amount, currency, recipient, and purpose match the approved proposal.
+5.	The proposal has not expired, been rejected, or already been executed.
+6.	The idempotency key has not already produced a different transaction.
+7.	The ledger update can be performed without duplicate effects.
+The state transition and ledger update should be atomic or implemented through a concurrency-safe mechanism. Retries must not create a second ledger entry.
+A payment should be reported as successful only after the authoritative sandbox operation confirms success.
+9. Document-processing security
+If the MVP supports PDF or image uploads:
+•	Allow only explicitly supported file types.
+•	Enforce file-size and processing limits.
+•	Validate uploaded content rather than trusting the filename or declared MIME type alone.
+•	Restrict file access to the owning user.
+•	Avoid publicly accessible document URLs.
+•	Treat extracted text as untrusted content.
+•	Ignore embedded instructions that attempt to alter system behavior or bypass authorization.
+•	Ask the user to review extracted financial values before they become confirmed records.
+•	Avoid storing original files longer than needed under the chosen retention policy.
+If document processing is not implemented, it must be described as a planned feature rather than a completed security capability.
+10. Privacy and data minimization
+Store only the information needed for the application's defined features.
+The MVP should not request or store:
+•	Bank account passwords.
+•	Payment-card security codes.
+•	Authentication tokens from third-party banking services.
+•	Unnecessary identity documents.
+•	Full document contents in audit logs.
+•	Unnecessary personal details in LLM prompts.
+Define a data-retention and deletion policy for user profiles, uploaded documents, financial records, and audit events. The policy must account for any evidence the competition requires the team to preserve.
+11. Error handling and availability
+The application must fail safely when a service is unavailable.
+•	If the LLM API fails, return a clear error or switch to a clearly labelled demo mode.
+•	If the database is unavailable, do not pretend that a write or payment succeeded.
+•	If a tool call fails validation, reject it before execution.
+•	If the ledger result is uncertain, reconcile the operation using its idempotency key before retrying.
+•	Do not expose stack traces, database internals, secrets, or other users' records to the frontend.
+•	Apply reasonable rate limits to expensive or sensitive operations.
+Demo mode must not be confused with live data or real financial activity.
+12. Audit and monitoring
+Record security-relevant events such as:
+•	Failed authorization attempts.
+•	Rejected tool calls.
+•	Invalid payment proposals.
+•	Approval and rejection events.
+•	Simulated payment execution attempts and outcomes.
+•	Duplicate-execution prevention.
+•	Important administrative changes.
+Audit records should contain timestamps, event types, resource references, outcomes, and request correlation IDs where appropriate.
+Do not log secrets, complete authentication tokens, or unnecessary financial document contents. Access to audit records should be restricted, and ordinary users must not be able to rewrite authoritative event history.
+13. Security testing plan
+Test	Expected result
+User A requests User B's account	Access denied
+Unauthenticated user calls a protected endpoint	Request rejected
+Frontend attempts to access privileged credentials	No privileged secret is exposed
+LLM proposes an unknown tool	Call rejected
+Tool receives invalid or excessive amounts	Validation fails
+Prompt asks the model to ignore security controls	Backend policies remain enforced
+Document contains malicious instructions	No privileged action is authorized
+Payment has no valid approval	Execution blocked
+Approved proposal is modified	Previous approval no longer authorizes execution
+Two requests execute the same proposal concurrently	At most one ledger effect
+Database or LLM service fails	No false success response
+User attempts to rewrite audit history	Operation denied
+RLS is tested with multiple users	Cross-user access remains blocked
+Testing must use fictional data and a non-production environment.
+14. Known limitations and residual risks
+The initial MVP is not a regulated banking service and must not claim to be one.
+Potential limitations include:
+•	Manually entered data may be inaccurate.
+•	Forecasts depend on user-provided assumptions and dates.
+•	Exchange-rate data may be illustrative or stale.
+•	Document extraction may misread amounts or dates.
+•	LLM explanations may still be misleading if not grounded in validated tool results.
+•	A sandbox ledger does not prove integration with a real payment provider.
+•	Security depends on correct implementation and configuration, not architecture documents alone.
+These limitations should be updated as the product develops and tested controls are added.
+15. Implementation status
+The security design is a specification, not a security certification.
+Before claiming that the application is secure, the team must:
+•	Implement authentication and authorization.
+•	Create and test RLS policies.
+•	Protect server-side credentials.
+•	Validate all AI tool calls.
+•	Implement and test explicit payment approval.
+•	Verify duplicate-execution prevention.
+•	Test cross-user access and failure recovery.
+•	Document actual results and outstanding issues.
+Acceptance criterion: No financial record or sensitive operation should become accessible or executable solely because the frontend or LLM requests it. The backend and database must independently enforce the applicable controls.
+

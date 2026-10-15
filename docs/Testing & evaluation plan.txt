@@ -1,0 +1,183 @@
+TuitionShield AI — Technical Documentation
+7. Testing & Evaluation Plan
+Project: TuitionShield AI
+Competition: 2026 Shenzhen International FinTech Competition — International Track, Topic C
+Status: Proposed testing plan — no test results are claimed until tests are executed.
+1. Purpose
+This document defines how TuitionShield AI will be tested before its competition demonstration.
+Testing must establish that:
+•	Financial calculations are correct and reproducible.
+•	Cash-flow forecasts identify relevant shortages.
+•	Scenario simulations do not alter baseline data.
+•	The AI agent uses approved tools and trusted results.
+•	User permissions are enforced.
+•	Payment approval and execution controls work correctly.
+•	The application handles errors without reporting false success.
+•	The MVP can be reproduced by a reviewer using documented instructions.
+2. Testing strategy
+Testing is divided into six levels:
+1.	Unit tests: Individual financial formulas and validation functions.
+2.	Integration tests: Interactions between the API, database, agent tools, and sandbox ledger.
+3.	Security tests: Authentication, authorization, RLS, tool restrictions, and payment controls.
+4.	End-to-end tests: Complete student workflows through the user interface.
+5.	Failure and recovery tests: Service outages, timeouts, invalid requests, and duplicate execution.
+6.	Competition acceptance tests: Reproducible demonstrations of the core judging requirements.
+Use fictional student records and a separate development/test environment. Never use real banking credentials or real-money transactions for the sandbox tests.
+3. Financial calculation tests
+Test F-01 — Exact funding coverage
+Input: Confirmed available funds of €8,000 and eligible expenses of €8,000.
+Expected result: Funding gap is €0 and projected aggregate surplus is €0.
+Test F-02 — Funding shortfall
+Input: Confirmed available funds of €8,000 and eligible expenses of €10,500.
+Expected result: Funding gap is €2,500.
+Test F-03 — Funding surplus
+Input: Confirmed available funds of €12,000 and eligible expenses of €10,500.
+Expected result: Funding gap is €0 and projected aggregate surplus is €1,500.
+Test F-04 — Pending scholarship
+Input: Available funds of €4,000, eligible expenses of €7,000, and a pending scholarship of €2,000.
+Expected result: The confirmed-funding calculation reports a gap of €3,000. The pending scholarship is displayed separately. If a scenario includes the scholarship, the scenario gap becomes €1,000.
+Test F-05 — Cancelled expense
+Input: €4,000 in eligible expenses and a cancelled €1,000 obligation.
+Expected result: The cancelled obligation is excluded from eligible expenses.
+Test F-06 — Paid expense
+Input: A €1,000 expense that has already been paid.
+Expected result: It is not counted again as a future outflow. Historical spending and remaining future obligations are reported separately where needed.
+Test F-07 — Currency precision
+Input: Valid amounts in currencies with different minor-unit precision.
+Expected result: Amounts are rounded and converted according to the defined currency rules. No unexpected binary floating-point errors appear.
+Test F-08 — Invalid inputs
+Input: Negative expenses, malformed currencies, invalid dates, or unsupported numeric values.
+Expected result: The relevant validation rejects the input or requires explicit correction. Invalid data is not silently accepted.
+4. Cash-flow and scenario tests
+Test C-01 — Scholarship arrives before tuition
+Verify that a confirmed scholarship arriving before a tuition deadline is reflected in the projected balance.
+Test C-02 — Scholarship arrives after tuition
+Verify that the application flags a possible deadline shortage even if total expected funding later exceeds total expenses.
+Test C-03 — Increased rent
+Apply a rent increase of 15%.
+Expected result: The scenario forecast changes appropriately, while the baseline forecast remains unchanged.
+Test C-04 — Delayed scholarship
+Delay a scholarship by one month.
+Expected result: The forecast recalculates cash-flow timing and identifies any newly introduced shortage dates.
+Test C-05 — Missing forecast dates
+Provide incomplete or ambiguous funding dates.
+Expected result: The forecast indicates uncertainty or requests clarification instead of presenting an unjustifiably precise result.
+Test C-06 — Scenario isolation
+Run multiple scenarios with different assumptions.
+Expected result: Each scenario has its own result set and does not overwrite the user's underlying financial records.
+5. AI agent and tool-calling tests
+ID	Test	Expected result
+A-01	Request a financial summary	Agent uses the approved read-only tool and returns validated results.
+A-02	Request a funding-gap calculation	The deterministic calculation engine supplies the numeric result.
+A-03	Request a scenario comparison	Agent calls the scenario tool with validated assumptions.
+A-04	Unknown tool name	Backend rejects the tool call.
+A-05	Malformed tool arguments	Schema or business-rule validation rejects the request.
+A-06	User requests another user's records	Authorization denies access.
+A-07	Prompt instructs the agent to ignore security rules	Backend controls remain enforced.
+A-08	LLM API is unavailable	Supported deterministic functions continue to work or a clear fallback is shown.
+A-09	Tool execution fails	Agent does not claim that the operation succeeded.
+A-10	Model response contradicts tool output	The application uses validated tool results and avoids unsupported financial claims.
+For each test, record the exact input, expected tool call, actual tool call, result, and pass/fail status.
+6. Database and authorization tests
+Test D-01 — User data isolation
+Create two test users with separate financial records.
+Expected result: User A cannot retrieve, modify, or delete User B's records.
+Test D-02 — Unauthenticated access
+Attempt to access protected resources without a valid session.
+Expected result: The request is rejected.
+Test D-03 — Ownership manipulation
+Modify a request to include another user's resource ID or user ID.
+Expected result: The backend rejects unauthorized access, even if the request was manually constructed.
+Test D-04 — RLS verification
+Run database access tests using the intended application roles and user sessions.
+Expected result: Policies enforce the intended ownership rules.
+Test D-05 — Privileged credentials
+Inspect frontend bundles, repository files, and logs for service-role keys or LLM API keys.
+Expected result: No privileged credentials are exposed.
+Test D-06 — Audit protection
+Attempt to modify or delete authoritative audit events using an ordinary user account.
+Expected result: The operation is denied.
+Test D-07 — Referential integrity
+Attempt to create a payment proposal linked to a nonexistent obligation.
+Expected result: The request fails validation or the database constraint rejects it.
+7. Sandbox payment tests
+ID	Test	Expected result
+P-01	Create a valid payment proposal	Proposal is created but not executed.
+P-02	Attempt execution without approval	Execution is blocked.
+P-03	User declines a proposal	Proposal is rejected and cannot be executed.
+P-04	Approve a valid proposal	Approval is recorded against the exact proposal.
+P-05	Modify amount after approval	Previous approval no longer authorizes execution.
+P-06	Execute an approved proposal	Exactly one sandbox ledger effect is recorded.
+P-07	Repeat the same execution request	No duplicate ledger effect is created.
+P-08	Submit concurrent execution requests	At most one ledger effect is created.
+P-09	Execute an expired proposal	Execution is blocked.
+P-10	Simulate a database failure	No false success response is returned.
+P-11	Retry after an uncertain timeout	The system reconciles the original request before retrying.
+P-12	Check final ledger status	Proposal, approval, execution, and ledger references are traceable.
+These tests are especially important because the competition emphasizes task completion and security.
+8. Document-processing tests
+If document extraction is included in the MVP, test:
+•	Supported PDF and image formats.
+•	Unsupported file types.
+•	Oversized files.
+•	Documents containing missing or ambiguous amounts.
+•	Documents containing malicious instructions.
+•	Incorrectly extracted currencies or dates.
+•	User review and correction of extracted values.
+•	Unauthorized attempts to access another user's document.
+Expected result: Extracted values remain untrusted until validated, and document contents cannot grant additional permissions.
+If document processing is deferred, mark these tests not applicable to the current MVP, rather than claiming that they passed.
+9. End-to-end competition demonstration
+The following is the recommended end-to-end test scenario.
+Sample profile: A fictional student with €8,000 available, €4,000 in tuition, €5,500 in living expenses, and €1,000 in other annual expenses.
+Total annual expenses are €10,500, so the initial aggregate funding gap is €2,500.
+Demonstration sequence:
+1.	Open the dashboard and show the sample financial profile.
+2.	Verify the funding-gap calculation.
+3.	Run a cash-flow forecast and inspect the projected balances.
+4.	Simulate a delayed scholarship or increased rent.
+5.	Ask the AI agent to explain the change using approved tools.
+6.	Prepare a simulated tuition payment proposal.
+7.	Attempt execution before approval and demonstrate that it is blocked.
+8.	Explicitly approve the proposal.
+9.	Execute the sandbox payment.
+10.	Verify the ledger record and audit trail.
+11.	Repeat the execution request and demonstrate duplicate prevention.
+Use only fictional data. The demo must clearly identify the payment as simulated.
+10. Test result record
+Maintain a results table as the MVP develops.
+Field	Description
+Test ID	Unique test identifier.
+Test date	Date and time of execution.
+Environment	Local, test, or demo environment.
+Build/version	Commit hash or identifiable build.
+Preconditions	Required sample data and configuration.
+Input	Actual test input.
+Expected result	Defined before running the test.
+Actual result	Observed outcome.
+Status	Pass, fail, blocked, or not applicable.
+Evidence	Test log, screenshot, or report reference.
+Defect reference	Link to any issue discovered.
+Do not mark a test as passed until it has been executed and its result verified.
+11. Recommended tooling
+For a React, TypeScript, and Supabase MVP:
+•	Vitest: Unit tests for calculation functions and frontend utilities.
+•	React Testing Library: UI behavior and approval-control tests.
+•	Playwright: Browser-based end-to-end tests.
+•	Supabase test environment: Database, authentication, and RLS testing.
+•	API integration tests: Backend validation, tool calls, and payment operations.
+Use tools that fit the actual backend implementation. If the project uses Supabase Edge Functions, include tests for those functions and their authorization behavior.
+12. Acceptance criteria
+The MVP is ready for a competition demonstration when:
+1.	Financial calculations pass their defined tests.
+2.	Forecasts and scenarios produce reproducible results.
+3.	Cross-user data access is denied.
+4.	The AI cannot bypass the approved tool registry.
+5.	Payment execution is blocked without valid explicit approval.
+6.	Duplicate and concurrent execution tests do not create duplicate ledger effects.
+7.	Failures are reported accurately.
+8.	The end-to-end demo is reproducible.
+9.	Test evidence is collected and linked to the relevant build.
+10.	Known defects and unimplemented features are disclosed.
+Implementation status: This is a test plan, not a test report. Actual results must be recorded after the corresponding features are implemented and tested.
+

@@ -1,0 +1,307 @@
+TuitionShield AI — Technical Documentation
+3. AI Agent & Controlled Tool-Calling Design
+Project: TuitionShield AI
+Competition: 2026 Shenzhen International FinTech Competition — International Track, Topic C: Cross-border & Student Finance Assistant
+Document status: Proposed architecture and control specification. Implementation and security testing have not yet been verified.
+1. Purpose
+The TuitionShield AI agent converts natural-language requests into controlled application operations.
+A student might ask:
+•	“Can I afford my tuition this semester?”
+•	“What happens if my scholarship arrives one month late?”
+•	“Why am I at risk of running out of money?”
+•	“Prepare a simulated tuition payment for my review.”
+The agent identifies the required operation, selects from an approved tool registry, validates tool arguments, obtains results from trusted application services, and explains those results.
+The agent is not an unrestricted autonomous financial operator. It cannot directly access the database, execute arbitrary code, call arbitrary URLs, or move real money.
+2. Core design principle
+The LLM decides which permitted action may help answer a request. The application decides whether that action is valid and authorized.
+The LLM must not be treated as an authentication mechanism, permission system, source of truth for financial records, or authority to approve payments.
+All financial calculations are executed by deterministic application services. All data access is enforced by the backend and database policies.
+3. Architecture
+flowchart TD
+    U["Student"] --> UI["React + TypeScript UI"]
+    UI --> API["Authenticated Backend API"]
+    API --> ORCH["Agent Orchestrator"]
+    ORCH <--> LLM["LLM API"]
+    ORCH --> VAL["Tool Schema and Policy Validator"]
+    VAL --> REG["Allowlisted Tool Registry"]
+    REG --> FIN["Financial Calculation Engine"]
+    REG --> RISK["Risk and Forecast Service"]
+    REG --> DOC["Document Extraction Service"]
+    REG --> PAY["Payment Proposal and Approval Service"]
+    FIN --> DB["Supabase PostgreSQL"]
+    RISK --> DB
+    DOC --> DB
+    PAY --> DB
+    PAY --> LEDGER["Sandbox Ledger"]
+    REG --> AUDIT["Audit Events"]
+    PAY --> AUDIT
+    ORCH --> RESP["Validated Response Builder"]
+    RESP --> UI
+This is the proposed architecture. It must be updated if the implemented application differs.
+4. Agent execution lifecycle
+Step 1 — Receive and classify the request
+The backend receives an authenticated user's request and identifies its purpose, such as financial analysis, forecasting, scenario simulation, document extraction, or payment preparation.
+Classification does not grant permissions. The backend must independently authorize every operation.
+Step 2 — Provide controlled tool definitions
+The orchestrator sends the LLM a limited list of available tools, their descriptions, and their validated argument schemas.
+The model may propose a tool call, but its proposal is untrusted input.
+Step 3 — Validate the proposed tool call
+Before execution, the backend must:
+•	Confirm that the tool exists in the allowlist.
+•	Validate arguments against the tool's schema.
+•	Reject unknown fields and invalid values.
+•	Enforce amount, date, currency, and input-size limits.
+•	Derive the user's identity from the authenticated session rather than trusting a model-supplied user ID.
+•	Check permissions for the requested operation.
+•	Reject unauthorized or unsafe requests.
+Step 4 — Execute the tool on the server
+The backend invokes the relevant application service using narrowly scoped permissions.
+The tool returns structured output, including status, result fields, and warnings where applicable. Database queries and financial calculations must be implemented in trusted application code, not improvised by the LLM.
+Step 5 — Return verified results to the model
+The orchestrator may pass the tool's structured output to the LLM for explanation. The model must not replace the returned figures with unsupported estimates.
+If a tool fails, the agent must report the failure or request missing information. It must not pretend that the operation succeeded.
+Step 6 — Apply action-specific controls
+Read-only analysis can generally continue after validation and authorization.
+A simulated payment requires a separate proposal, an explicit user approval action, server-side revalidation, and a controlled ledger execution. A model-generated sentence such as “the user approves” does not count as approval.
+Step 7 — Produce the response and audit record
+The backend returns a response containing the relevant results, assumptions, warnings, and operation status. Important tool calls and payment transitions should be recorded in an audit trail without unnecessarily storing sensitive prompts or documents.
+5. Approved tool registry
+The following is the proposed initial tool catalog. Implement only tools that the MVP actually supports.
+Tool 1: get_financial_summary
+Purpose: Retrieve a user's authorized financial summary.
+Inputs:
+•	Optional planning period.
+•	Optional reporting currency.
+Outputs:
+•	Available starting funds.
+•	Confirmed and pending funding, separately.
+•	Planned expenses.
+•	Funding gap and relevant warnings.
+Controls:
+•	Read-only.
+•	User identity derived from the authenticated session.
+•	Access restricted to the user's authorized records.
+Tool 2: calculate_funding_gap
+Purpose: Calculate the gap between eligible expenses and confirmed funding.
+Inputs:
+•	Planning period.
+•	Validated financial-plan reference or validated calculation inputs.
+Outputs:
+•	Eligible expense total.
+•	Confirmed funding total.
+•	Funding gap.
+•	Currency, period, and warnings.
+Controls:
+•	Uses the deterministic financial engine.
+•	Rejects unsupported currencies and invalid inputs.
+•	Never uses LLM arithmetic as the source of the result.
+Tool 3: forecast_cash_flow
+Purpose: Project the student's financial balance over time.
+Inputs:
+•	Planning period.
+•	Authorized financial-plan reference.
+•	Optional validated forecast assumptions.
+Outputs:
+•	Periodic projected balances.
+•	Lowest projected balance.
+•	Potential shortage dates.
+•	Uncertainty warnings.
+Controls:
+•	Uses dated inflows and outflows.
+•	Separates pending funding from confirmed funds.
+•	Clearly labels forecast assumptions.
+Tool 4: simulate_financial_scenario
+Purpose: Evaluate a hypothetical change without modifying the baseline financial plan.
+Inputs:
+•	Baseline plan reference.
+•	Scenario changes, such as rent adjustment or scholarship delay.
+Outputs:
+•	Baseline and scenario comparisons.
+•	Funding-gap change.
+•	Lowest projected balance.
+•	First projected shortage date, if any.
+Controls:
+•	Validates allowed scenario parameters.
+•	Does not create actual financial transactions.
+•	Does not overwrite the baseline plan.
+Tool 5: extract_financial_document
+Purpose: Extract candidate financial fields from a supported uploaded document.
+Inputs:
+•	Authorized document reference.
+•	Supported extraction type.
+Outputs:
+•	Candidate amounts, currencies, dates, and funding or expense categories.
+•	Extraction confidence or review flags where supported.
+Controls:
+•	Document content is untrusted data, not instructions to the agent.
+•	Extracted values require validation and, where appropriate, user confirmation.
+•	The tool must not silently turn extracted text into a confirmed scholarship or paid expense.
+•	File size, file type, and access permissions must be checked.
+Tool 6: create_payment_proposal
+Purpose: Prepare a simulated payment for user review.
+Inputs:
+•	Authorized obligation reference.
+•	Amount and currency.
+•	Recipient or payee details appropriate for the simulation.
+•	Purpose and proposed execution date.
+Outputs:
+•	Unique proposal ID.
+•	Proposed amount, currency, recipient, and purpose.
+•	Current status and validation warnings.
+Controls:
+•	Creates a proposal only; it does not execute the payment.
+•	Validates the proposal against authorized records and configured limits.
+•	Must not claim to send money or contact a real financial institution.
+Tool 7: get_payment_status
+Purpose: Retrieve the status of an authorized simulated payment proposal or ledger operation.
+Inputs:
+•	Proposal ID or simulated transaction reference.
+Outputs:
+•	Proposal status.
+•	Approval status.
+•	Execution status.
+•	Relevant ledger reference.
+Controls:
+•	The backend verifies ownership and access.
+•	The model cannot alter payment status by requesting a different status in natural language.
+Tool 8: request_payment_approval
+Purpose: Start the application's explicit approval workflow.
+Inputs:
+•	Existing validated proposal ID.
+Outputs:
+•	A proposal summary and a user-interface action requiring explicit confirmation.
+Controls:
+•	Does not itself authorize execution.
+•	Approval must come from a real authenticated user interaction.
+•	The server records which proposal was approved, by whom, and when.
+Tool 9: execute_sandbox_payment
+Purpose: Execute an approved payment inside the simulated ledger.
+Inputs:
+•	Proposal ID.
+•	Approval reference generated and validated by the backend.
+•	Idempotency key or equivalent duplicate-prevention mechanism.
+Outputs:
+•	Simulated execution status.
+•	Sandbox ledger reference.
+•	Execution timestamp or failure reason.
+Controls:
+•	Never connects to a real payment rail.
+•	Requires a valid, unexpired approval associated with the exact proposal.
+•	Revalidates authorization, amount, currency, proposal status, and execution eligibility.
+•	Uses an atomic or otherwise concurrency-safe execution process.
+•	Prevents duplicate ledger effects on retries.
+•	Records success or failure for audit purposes.
+Important: The approval and execution tools should not be made available as unrestricted, automatic actions to the LLM. They must be mediated by backend policy and the application's explicit approval interface.
+6. Tool schema example
+The following illustrates the intended contract for a read-only funding-gap tool. It is a specification example, not proof of an implemented endpoint.
+{
+  "name": "calculate_funding_gap",
+  "description": "Calculate the funding gap using validated financial inputs.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "plan_id": {
+        "type": "string",
+        "description": "Reference to an authorized financial plan"
+      },
+      "period_start": {
+        "type": "string",
+        "format": "date"
+      },
+      "period_end": {
+        "type": "string",
+        "format": "date"
+      },
+      "currency": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "plan_id",
+      "period_start",
+      "period_end",
+      "currency"
+    ],
+    "additionalProperties": false
+  }
+}
+Schema validation is only one security layer. The backend must still authenticate the user, authorize access to plan_id, validate the date range and currency, and enforce business rules.
+7. Payment approval state machine
+The proposed payment lifecycle is:
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> Validated: Validation succeeds
+    Draft --> Rejected: Validation fails
+    Validated --> AwaitingApproval: Proposal presented
+    AwaitingApproval --> Rejected: User declines
+    AwaitingApproval --> Approved: Explicit approval
+    Approved --> Executing: Server revalidates
+    Executing --> Executed: Ledger update succeeds
+    Executing --> Failed: Execution fails
+    Approved --> Expired: Approval or proposal expires
+    Failed --> Executing: Safe retry with idempotency
+    Executed --> [*]
+    Rejected --> [*]
+    Expired --> [*]
+The implementation must define allowed transitions and enforce them server-side. A user must not be able to change a rejected, expired, or already-executed proposal into an executable one by modifying a request.
+The approval must be bound to the specific proposal details. If the amount, currency, recipient, or other material details change, the old approval must no longer authorize execution.
+8. Security boundaries
+LLM boundary
+•	Treat model output as untrusted.
+•	Expose only explicitly approved tools.
+•	Never expose unrestricted SQL, shell execution, or arbitrary network access.
+•	Limit the number of tool calls and the total execution time.
+•	Validate tool output before presenting it as a verified financial result.
+•	Do not expose API credentials or unnecessary personal financial data in prompts.
+Database boundary
+•	Use a secure server-side access layer.
+•	Enforce Supabase Row Level Security where applicable.
+•	Keep service-role credentials on the server and out of frontend bundles.
+•	Verify ownership and permissions for every object reference.
+•	Do not let the LLM construct and execute arbitrary database queries.
+Document boundary
+Uploaded documents may contain malicious instructions, misleading text, or incorrect financial information. The extraction service must treat their contents as data to inspect, not instructions to obey.
+Payment boundary
+The payment subsystem must have no real-money integration in this MVP. The sandbox ledger must independently validate approval and execution rules rather than relying on the agent to behave correctly.
+9. Error handling and fallback
+Situation	Required behavior
+LLM API unavailable	Use demo fallback or expose deterministic financial tools without AI, where implemented.
+Invalid tool arguments	Reject the call and return a structured validation error.
+User lacks permission	Deny access without revealing another user's data.
+Financial inputs are incomplete	Ask for missing information or return a qualified result.
+Tool execution fails	Report the failure and avoid claiming success.
+Tool returns inconsistent data	Stop the affected workflow and log a sanitized error.
+Payment approval is absent	Block simulated execution.
+Payment request is duplicated	Return the existing result or safely reject the duplicate without a second ledger effect.
+Scenario changes exceed limits	Reject the scenario or ask for corrected assumptions.
+Document contains instructions to bypass controls	Ignore those instructions and apply normal tool policies.
+Demo fallback should be clearly labelled as demo mode. It must not fabricate live exchange rates, real transactions, or production data.
+10. Required tests
+•	Unknown tool names are rejected.
+•	Extra or invalid tool arguments are rejected.
+•	A user cannot retrieve another user's financial plan.
+•	LLM-generated arithmetic cannot override deterministic results.
+•	A pending scholarship is not represented as confirmed funding.
+•	A scenario does not change baseline records.
+•	A malicious document cannot authorize tool execution.
+•	The model cannot bypass payment approval.
+•	Approval for one proposal cannot authorize a different proposal.
+•	Changes to material payment details invalidate the previous approval.
+•	Repeated execution requests cannot create duplicate ledger entries.
+•	Concurrent execution attempts do not create duplicate effects.
+•	Failed operations return accurate statuses.
+•	The application behaves safely when the LLM API is unavailable.
+•	Audit records can trace a proposal through approval and simulated execution.
+11. Implementation status and acceptance criteria
+Current status: proposed design, not verified as implemented.
+Before claiming completion, the team must:
+1.	Implement the server-side tool registry and schema validation.
+2.	Connect each available tool to a deterministic application service.
+3.	Enforce authentication, authorization, and database policies.
+4.	Implement the approval workflow and sandbox ledger.
+5.	Add idempotency and concurrency protections.
+6.	Test invalid inputs, permission violations, LLM failures, and payment retries.
+7.	Capture reproducible test results and execution logs.
+8.	Update this document to identify which tools are implemented, which are tested, and which remain planned.
+Acceptance criterion: A reviewer should be able to ask a financial question, observe the agent select an approved tool, verify the tool's actual result, and confirm that the agent cannot bypass authorization or execute a simulated payment without explicit user approval.
+

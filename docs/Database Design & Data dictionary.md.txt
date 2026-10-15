@@ -1,0 +1,170 @@
+TuitionShield AI — Technical Documentation
+4. Database Design & Data Dictionary
+Project: TuitionShield AI
+Database: Supabase PostgreSQL
+Status: Proposed design — implementation and testing not yet verified.
+1. Purpose
+The database stores the minimum information required to support student financial planning, forecasts, AI-assisted analysis, simulated payment workflows, and auditability.
+The design prioritizes:
+•	Isolation of each user's financial records.
+•	Consistent monetary values and currency codes.
+•	Clear separation of confirmed and pending funding.
+•	Traceable changes to payment proposals and simulated transactions.
+•	Compatibility with Supabase authentication and Row Level Security (RLS).
+•	No storage of bank passwords, payment-card credentials, or real banking tokens.
+2. Architecture
+The React frontend communicates with a trusted server-side API. The API authenticates requests, validates inputs, applies business rules, and accesses PostgreSQL through an appropriately scoped database connection.
+Supabase Auth provides user identity. PostgreSQL stores application records. RLS enforces database-level access restrictions as a second line of defense.
+The LLM must not connect directly to the database or receive unrestricted SQL access.
+3. Proposed database tables
+3.1 profiles
+Stores basic application profile information linked to the Supabase Auth user.
+Field	Type	Purpose
+id	UUID, primary key	Matches the authenticated user's ID.
+display_name	Text, nullable	Optional display name.
+home_currency	Char(3)	Preferred reporting currency.
+created_at	Timestamptz	Creation timestamp.
+updated_at	Timestamptz	Last update timestamp.
+The user's identity must come from Supabase Auth, not from a user ID supplied by an LLM tool call.
+3.2 financial_accounts
+Represents a student's declared financial resources. These are manually entered or otherwise explicitly sourced balances, not automatically verified bank accounts.
+Field	Type	Purpose
+id	UUID, primary key	Account record identifier.
+user_id	UUID	Owner.
+name	Text	User-defined label.
+currency	Char(3)	Currency code.
+balance_minor	Bigint	Balance in the currency's minor units, where applicable.
+source_type	Text	For example, manual entry or imported document.
+verified_status	Text	Declared, reviewed, or verified according to supported evidence.
+as_of_date	Date	Date the balance represents.
+created_at	Timestamptz	Creation timestamp.
+updated_at	Timestamptz	Last update timestamp.
+Do not describe manually entered balances as bank-verified. Currency precision must be handled using explicit currency metadata rather than assuming every currency has two decimal places.
+3.3 funding_sources
+Stores expected funding, such as scholarships, family support, grants, and other income.
+Field	Type	Purpose
+id	UUID, primary key	Funding record identifier.
+user_id	UUID	Owner.
+name	Text	Funding description.
+amount_minor	Bigint	Expected amount in minor units.
+currency	Char(3)	Funding currency.
+status	Text	Pending, confirmed, received, or cancelled.
+expected_date	Date, nullable	Expected arrival date.
+received_at	Timestamptz, nullable	Actual receipt timestamp, when applicable.
+source_reference	Text, nullable	Optional reference to supporting evidence.
+created_at	Timestamptz	Creation timestamp.
+updated_at	Timestamptz	Last update timestamp.
+Pending funds must not be silently counted as confirmed funding. Once funding is received, the application must reconcile the funding record with the cash-flow model without counting it twice.
+3.4 financial_obligations
+Stores planned or actual expenses, including tuition, accommodation, food, insurance, and other study-related costs.
+Field	Type	Purpose
+id	UUID, primary key	Obligation identifier.
+user_id	UUID	Owner.
+title	Text	Expense description.
+category	Text	Tuition, rent, food, insurance, or other.
+amount_minor	Bigint	Amount due in minor units.
+currency	Char(3)	Expense currency.
+due_date	Date	Payment deadline.
+status	Text	Planned, due, paid, cancelled, or overdue.
+recurrence_rule	Text, nullable	Optional recurrence description.
+paid_at	Timestamptz, nullable	Payment timestamp, when applicable.
+created_at	Timestamptz	Creation timestamp.
+updated_at	Timestamptz	Last update timestamp.
+Recurring expenses must be expanded into dated forecast entries or handled by a defined recurrence engine. The system must not accidentally count both a recurring template and its generated occurrence as separate expenses.
+3.5 financial_transactions
+Stores actual or simulated cash movements used by the financial model. The transaction source must be explicit.
+Field	Type	Purpose
+id	UUID, primary key	Transaction identifier.
+user_id	UUID	Owner.
+transaction_type	Text	Inflow or outflow.
+amount_minor	Bigint	Transaction amount in minor units.
+currency	Char(3)	Transaction currency.
+transaction_date	Timestamptz	Transaction timestamp.
+status	Text	Pending, completed, failed, or reversed.
+source_type	Text	Manual, imported, or sandbox ledger.
+source_reference	Text, nullable	Reference to originating record.
+idempotency_key	Text, nullable	Duplicate-prevention key where needed.
+created_at	Timestamptz	Creation timestamp.
+Transaction records should not be silently overwritten. Corrections should use an appropriate correction or reversal workflow with a traceable reason.
+3.6 payment_proposals
+Stores simulated payment requests and their approval lifecycle.
+Field	Type	Purpose
+id	UUID, primary key	Proposal identifier.
+user_id	UUID	Owner.
+obligation_id	UUID, nullable	Related expense.
+amount_minor	Bigint	Proposed amount.
+currency	Char(3)	Payment currency.
+recipient_label	Text	Simulated recipient description.
+purpose	Text	Payment purpose.
+status	Text	Draft, awaiting approval, approved, rejected, executing, executed, failed, or expired.
+approved_at	Timestamptz, nullable	Approval timestamp.
+executed_at	Timestamptz, nullable	Simulated execution timestamp.
+approval_reference	UUID, nullable	Reference to the server-validated approval record.
+idempotency_key	Text	Unique execution key.
+created_at	Timestamptz	Creation timestamp.
+updated_at	Timestamptz	Last update timestamp.
+The server must validate every state transition. A frontend status update alone must never authorize a payment.
+3.7 scenario_runs
+Stores the results of what-if financial simulations.
+Field	Type	Purpose
+id	UUID, primary key	Scenario identifier.
+user_id	UUID	Owner.
+name	Text	Scenario name.
+baseline_reference	UUID or version reference	Baseline used for the simulation.
+assumptions	JSONB	Validated scenario changes.
+results	JSONB	Structured calculation outputs.
+currency	Char(3)	Reporting currency.
+created_at	Timestamptz	Simulation timestamp.
+The JSONB fields must have validated schemas. Scenario results are derived outputs and must not be treated as authoritative source financial records.
+3.8 audit_events
+Records important security and workflow events.
+Field	Type	Purpose
+id	UUID, primary key	Event identifier.
+actor_user_id	UUID, nullable	Authenticated actor, where applicable.
+event_type	Text	Event category.
+resource_type	Text	Resource category.
+resource_id	UUID, nullable	Related resource.
+result	Text	Success, denied, or failure.
+request_id	UUID, nullable	Request correlation identifier.
+details	JSONB	Minimal, sanitized event metadata.
+created_at	Timestamptz	Event timestamp.
+Audit records should be append-only for normal application users. Do not log passwords, API keys, authentication tokens, full document contents, or unnecessary sensitive financial details.
+4. Relationships
+•	One authenticated user has one profile.
+•	One user can have multiple financial accounts, funding sources, obligations, transactions, payment proposals, and scenario runs.
+•	A payment proposal can reference one related obligation.
+•	A simulated payment execution should reference the corresponding proposal through a unique ledger or transaction reference.
+•	Audit events may reference the relevant user and resource.
+•	Every user-owned record must have a clearly defined ownership relationship.
+Foreign keys, unique constraints, check constraints, and indexes must be created in database migrations.
+5. Database security rules
+1.	Enable RLS on every table accessible through the Supabase client.
+2.	Permit users to read and update only the records they own, where the operation is appropriate.
+3.	Restrict sensitive state changes, including payment approval and execution, to trusted server-side operations.
+4.	Do not permit users to directly insert fabricated audit events or mark payments as executed.
+5.	Keep privileged database credentials exclusively in trusted server-side environments.
+6.	Use foreign keys and database constraints to protect referential integrity.
+7.	Use indexes for owner IDs, relevant dates, statuses, and frequently queried references.
+8.	Define retention and deletion behavior for financial records and audit events.
+6. Currency and financial integrity
+•	Store the original amount and currency.
+•	Use integer minor units only where the currency's precision is known and supported.
+•	Avoid floating-point arithmetic for monetary calculations.
+•	Record exchange-rate assumptions and conversion results separately.
+•	Define rounding rules for currency conversions and transfer fees.
+•	Prevent duplicate transactions through unique constraints and idempotency controls.
+•	Keep scenario simulations separate from actual financial records.
+7. Migration and implementation plan
+Implement the schema through version-controlled Supabase migrations. Add the tables in dependency order, followed by constraints, indexes, RLS policies, and test fixtures.
+Use fictional student data in development and competition demonstrations. Any seeded demonstration records should be clearly identifiable as sample data.
+8. Acceptance criteria
+•	Every user-owned record is isolated by authorization and RLS.
+•	Cross-user access tests fail safely.
+•	Currency and amount validation rejects invalid values.
+•	Funding and expenses are not double-counted.
+•	Payment status changes are controlled by the backend.
+•	Duplicate execution cannot create duplicate ledger effects.
+•	Audit records capture important events without exposing secrets.
+•	Migrations can recreate the database schema in a clean environment.
+Implementation status: All tables, policies, and tests remain proposed until created and verified in the actual project.
+

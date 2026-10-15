@@ -1,0 +1,149 @@
+TuitionShield AI — Technical Documentation
+2. Core Algorithm Description
+Project: TuitionShield AI
+Competition: 2026 Shenzhen International FinTech Competition — International Track, Topic C: Cross-border & Student Finance Assistant
+Document status: Technical design draft. Implementation and testing have not yet been verified.
+1. Purpose
+TuitionShield AI helps international students understand whether their available funding can cover tuition, living expenses, and other study-abroad costs.
+The system converts financial inputs into reproducible calculations, monthly forecasts, shortage alerts, and scenario comparisons. An AI agent may explain these results and invoke approved application tools, but it must not be responsible for the underlying arithmetic.
+2. Design principles
+1.	Deterministic calculations: Identical validated inputs and assumptions must produce identical financial results.
+2.	Explicit financial assumptions: Every forecast must identify its time period, currency, and relevant assumptions.
+3.	Separation of confirmed and expected funds: Pending scholarships or unconfirmed funding must not be presented as guaranteed money.
+4.	Time-aware analysis: A student can have sufficient total funding but still be unable to pay a bill on its due date.
+5.	Scenario isolation: What-if simulations must not modify the student's actual financial records.
+6.	Traceability: Important results should retain their input values, calculation version, assumptions, and execution timestamp.
+7.	Safe failure: Missing or invalid information must produce an uncertainty warning rather than a fabricated result.
+3. Financial data model
+Each financial record should contain, where applicable:
+•	Unique record ID and user ID.
+•	Amount and currency.
+•	Category, such as tuition, rent, food, scholarship, or savings.
+•	Transaction or obligation date.
+•	Status: confirmed, pending, estimated, paid, or cancelled.
+•	Recurrence information, if applicable.
+•	Source and last-updated timestamp.
+The application must distinguish an existing account balance from future income. A starting balance must not be counted again as a future inflow.
+All monetary values should use a reliable decimal representation, such as integer minor units where appropriate or a decimal arithmetic library. Avoid binary floating-point arithmetic for financial totals. Currency conversion must account for the currency's supported precision and rounding rules.
+4. Core algorithms
+4.1 Total planned expenses
+For a selected period, let each eligible obligation be (E_i).
+[
+E_{\text{total}}=\sum_{i=1}^{n} E_i
+]
+Include expenses whose dates fall within the selected period and whose status means they remain payable. Exclude cancelled obligations and avoid counting already-paid expenses again as future outflows.
+The interface should separate tuition, living expenses, other expenses, and already-paid costs where useful.
+4.2 Confirmed funding
+Let (B_0) represent the student's verified starting funds available for the relevant plan. Let (I_j) represent confirmed future inflows expected to arrive by the end of the period.
+[
+F_{\text{confirmed}}=B_0+\sum_{j=1}^{m} I_j
+]
+Pending scholarships and unconfirmed income should be displayed separately. They may be included in an explicitly labelled optimistic scenario, but not silently treated as confirmed funding.
+4.3 Funding gap
+[
+G=\max(0,E_{\text{total}}-F_{\text{confirmed}})
+]
+If the gap is zero, the selected period's planned expenses are covered by the counted funds in aggregate. This does not prove that every bill can be paid on time; the cash-flow forecast must check payment dates.
+If funding exceeds expenses, the interface may display the projected surplus:
+[
+S=\max(0,F_{\text{confirmed}}-E_{\text{total}})
+]
+Illustrative example: A student has €8,000 available and expects €10,500 in total expenses. The funding gap is €2,500. These values are sample data, not live financial information.
+4.4 Monthly cash-flow forecast
+For each month (t), calculate:
+[
+B_t=B_{t-1}+I_t-O_t
+]
+Where:
+•	(B_t): projected ending balance for month (t).
+•	(B_{t-1}): previous month's projected ending balance.
+•	(I_t): eligible inflows arriving in month (t).
+•	(O_t): eligible outflows due in month (t).
+The forecast begins with the starting balance and processes dated cash movements in chronological order.
+For a more accurate payment-deadline analysis, the system should also calculate the projected balance immediately before each significant obligation. A monthly total can conceal a shortage that occurs before a later scholarship arrives.
+4.5 Shortage detection
+For each forecast date, calculate the projected available balance after considering the cash movements due by that date.
+A shortage is detected when:
+[
+B_t<0
+]
+An optional reserve warning may be triggered when:
+[
+B_t<R
+]
+Where (R) is the student's configured minimum reserve.
+The system should distinguish:
+•	Projected deficit: The balance is expected to become negative.
+•	Low-reserve warning: The balance remains positive but falls below the chosen reserve.
+•	Deadline risk: Funds may not arrive before a specific payment is due.
+•	Uncertain forecast: Important amounts, dates, or funding statuses are missing or unverified.
+These are planning alerts, not guarantees about the student's future financial situation.
+4.6 Scenario simulation
+A scenario is a temporary copy of the baseline assumptions with selected changes.
+Examples include:
+•	Rent increases by 15%.
+•	A scholarship is delayed by one month.
+•	Tuition changes.
+•	An expense is added.
+•	An exchange rate or transfer fee changes.
+The application must recalculate the affected forecast without overwriting the original records.
+For a rent increase:
+[
+R_{\text{new}}=R_{\text{base}}(1+p)
+]
+Where (p) is the assumed increase expressed as a decimal.
+The application should compare baseline and scenario outputs, including the funding gap, lowest projected balance, first shortage date, and required additional funding.
+4.7 Currency conversion
+When an amount in currency (A) is converted into currency (B):
+[
+A_B=A_A\times r_{A\rightarrow B}
+]
+Where (r_{A\rightarrow B}) is the stated exchange rate, expressed as units of currency (B) per unit of currency (A).
+The conversion record should identify the rate, its source, its timestamp, the rate direction, and any applicable fee. If a rate is manually entered or used only for demonstration, the interface must label it accordingly.
+Transfer costs should be calculated according to the chosen provider's fee structure. The system must not claim to offer a live or guaranteed exchange rate unless a verified rate source is actually integrated.
+5. Algorithm execution workflow
+1.	Receive the user's financial planning request.
+2.	Authenticate the user and retrieve only authorized financial records.
+3.	Validate amounts, currencies, dates, statuses, and relevant assumptions.
+4.	Normalize eligible inputs for the selected period.
+5.	Execute deterministic calculations.
+6.	Evaluate shortage conditions and payment deadlines.
+7.	Store or return the calculation results with their assumptions.
+8.	Let the AI agent explain the results using the returned structured data.
+9.	Display the result, warnings, and limitations to the user.
+If required information is missing, the system should ask the user for clarification or return a clearly qualified result.
+6. Suggested calculation interface
+The financial engine should expose well-defined functions, independent of the LLM provider:
+•	calculateFundingGap(input)
+•	forecastCashFlow(input)
+•	detectFinancialRisks(input)
+•	simulateScenario(baseline, changes)
+•	convertCurrency(amount, rate, precision)
+•	validateFinancialPlan(input)
+These names describe proposed interfaces; they are not claims that these functions already exist.
+Each function should validate its inputs and return structured results. For example, a funding-gap calculation could return the total eligible expenses, confirmed funding, gap, currency, period, and any warnings.
+7. Required tests
+Test	Expected result
+Funding exactly equals expenses	Gap equals zero.
+Expenses exceed funding	Gap equals the difference.
+Funding exceeds expenses	Gap equals zero and surplus is positive.
+A cancelled obligation is present	It is excluded from eligible expenses.
+A scholarship is pending	It is not included in confirmed funding.
+An expense is already paid	It is not counted again as a future outflow.
+A scholarship arrives after tuition is due	The forecast can flag the earlier deadline risk.
+Rent increases in a scenario	The baseline remains unchanged.
+Exchange-rate direction is reversed	Validation or tests detect the incorrect conversion.
+A required date or amount is missing	The system reports incomplete input instead of inventing a value.
+The LLM service is unavailable	Deterministic calculations remain available if the application is operational.
+8. Implementation status and acceptance criteria
+Current status: designed, not verified as implemented.
+The algorithm section is ready to guide implementation. Before claiming completion, the team must:
+•	Implement the financial calculation functions.
+•	Define and enforce financial data validation.
+•	Add automated tests with known expected outputs.
+•	Verify date-sensitive cash-flow behavior.
+•	Test currency precision and rounding.
+•	Demonstrate that scenarios do not alter baseline data.
+•	Capture test results and link them to the source code.
+Acceptance criterion: A reviewer should be able to reproduce a financial result from its documented inputs and verify that the same result is returned without relying on LLM-generated arithmetic.
+
